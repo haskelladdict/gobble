@@ -1,3 +1,10 @@
+// Copyright 2014 Markus Dittrich. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+//
+// gobble is a simple program for retrieving files via
+// http, https, and ftp á la wget
+
 package main
 
 import (
@@ -10,14 +17,25 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
+// command line settings
 var (
-	urlTarget = flag.String("u", "", "url to download")
-	outFile   = flag.String("o", "", "name of output file")
-	numBytes  = 40960 // chunk site for reading and writing
-	version   = 0.1   // gobble version
+	urlTarget   = flag.String("u", "", "url to download")
+	outFileName = flag.String("o", "", "name of output file")
+	toStdOut    = flag.Bool("s", false, "output to stdout")
 )
+
+// general settings
+var (
+	numBytes = 40960 // chunk site for reading and writing
+	version  = 0.1   // gobble version
+)
+
+// progress bar
+var progressBar = "-----------------------------------"
 
 func main() {
 
@@ -25,10 +43,6 @@ func main() {
 	if *urlTarget == "" {
 		usage()
 	}
-
-	// open output file if requested
-	file := openOutfile()
-	defer file.Close()
 
 	// start http client
 	client := &http.Client{}
@@ -38,25 +52,30 @@ func main() {
 	}
 	defer resp.Body.Close()
 
-	printInfo(*urlTarget, resp)
+	// open output file; nil if stdout was requested
+	var file *os.File
+	if !*toStdOut {
+		file, _ = openOutfile()
+		printInfo(*urlTarget, resp)
+	}
+	defer file.Close()
 
-	totalLength := resp.ContentLength
-	if totalLength == -1 {
+	totalBytes := resp.ContentLength
+	if totalBytes == -1 {
 		log.Fatal(errors.New("content has zero length"))
 	}
 
-	bytesRead, err := copyContent(resp.Body, file, totalLength)
+	bytesRead, err := copyContent(resp.Body, file, totalBytes)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("progress: %10d Bytes   %2.1f%%\n", bytesRead,
-		float64(bytesRead)/float64(totalLength)*100)
+	fmt.Println(statusString(bytesRead, totalBytes))
 }
 
 // copyContent reads the body content from the http connection and then
 // copies it either to the provided file or stdou
-func copyContent(body io.ReadCloser, file *os.File, totalLength int64) (int, error) {
+func copyContent(body io.ReadCloser, file *os.File, totalBytes int64) (int, error) {
 
 	buffer := make([]byte, numBytes)
 	bytesRead := 0
@@ -83,8 +102,7 @@ func copyContent(body io.ReadCloser, file *os.File, totalLength int64) (int, err
 		}
 
 		bytesRead += n
-		fmt.Printf("progress: %10d Bytes   %2.1f%%\r", bytesRead,
-			float64(bytesRead)/float64(totalLength)*100)
+		fmt.Print(statusString(bytesRead, totalBytes))
 	}
 
 	// write whatever is left
@@ -114,27 +132,45 @@ func bufWrite(content []byte, file *os.File) (int, error) {
 }
 
 // openOutfile opens the output file if one was requested
-// NOTE: If something goes wrong this function bails
-func openOutfile() *os.File {
-	if *outFile == "" {
-		return nil
+func openOutfile() (*os.File, error) {
+
+	fileName := *outFileName
+	if fileName == "" {
+		urlInfo, err := url.Parse(*urlTarget)
+		if err != nil {
+			return nil, err
+		}
+		if fileName = filepath.Base(urlInfo.Path); fileName == "" {
+			return nil, errors.New(fmt.Sprint("Could not extract filename from URL\n"))
+		}
 	}
 
-	file, err := os.Create(*outFile)
+	file, err := os.Create(fileName)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	return file
+
+	return file, nil
 }
 
+// statusString returns the status string corresponding to the given
+// number of bytes read.
+func statusString(bytesRead int, totalBytes int64) string {
+	percentage := float64(bytesRead) / float64(totalBytes) * 100
+	progressString := strings.Join(
+		[]string{progressBar[1 : 2+int(percentage/4)], ">"}, "")
+	return fmt.Sprintf("progress: %10d Bytes    %-30s  %2.1f%%\r", bytesRead,
+		progressString, percentage)
+}
+
+// printInfo prints a brief informative header about the connection
 func printInfo(urlTarget string, resp *http.Response) {
-	fmt.Println("This is gobble version ", version)
+	fmt.Println("********* This is gobble version ", version, " ***************")
 
 	urlInfo, err := url.Parse(urlTarget)
 	if err != nil {
 		return
 	}
-
 	cname, _ := net.LookupCNAME(urlInfo.Host)
 	ips, _ := net.LookupIP(cname)
 	fmt.Println("Connecting to", cname, "  ", ips)
