@@ -70,7 +70,7 @@ func main() {
 	}
 
 	if !*toStdout {
-		fmt.Println(statusString(bytesRead, totalBytes))
+		fmt.Println(statusString(bytesRead, totalBytes, true))
 	}
 }
 
@@ -104,7 +104,7 @@ func copyContent(body io.ReadCloser, file *os.File, totalBytes int64,
 
 		bytesRead += n
 		if !wantStdout {
-			fmt.Print(statusString(bytesRead, totalBytes))
+			fmt.Print(statusString(bytesRead, totalBytes, false))
 		}
 	}
 
@@ -171,18 +171,24 @@ func normalizeURLTarget(urlTarget string) string {
 // number of bytes read.
 // NOTE: Sites which don't provide the content length return a value of
 // -1 for totalbytes. In this case we print a simpler content string
-func statusString(bytesRead int, totalBytes int64) string {
+func statusString(bytesRead int, totalBytes int64, allDone bool) string {
+	var msg string
+	if allDone {
+		msg = "Finished:    "
+	} else {
+		msg = "In progress: "
+	}
 	var formatString string
 	if totalBytes == -1 {
 		progressString := "<=>"
-		formatString = fmt.Sprintf("progress: %10d Bytes    %-30s  \r", bytesRead,
+		formatString = fmt.Sprintf("%s %10d Bytes    %-30s  \r", msg, bytesRead,
 			progressString)
 	} else {
 		percentage := float64(bytesRead) / float64(totalBytes) * 100
 		progressString := strings.Join(
 			[]string{progressBar[1 : 2+int(percentage/4)], ">"}, "")
-		formatString = fmt.Sprintf("progress: %10d Bytes    %-30s  %2.1f%%\r", bytesRead,
-			progressString, percentage)
+		formatString = fmt.Sprintf("%s %10d Bytes    %-30s  %2.1f%%\r", msg,
+			bytesRead, progressString, percentage)
 	}
 	return formatString
 }
