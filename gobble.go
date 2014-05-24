@@ -8,10 +8,10 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io"
+	//	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -53,24 +53,25 @@ func main() {
 	defer resp.Body.Close()
 
 	// open output file; nil if stdout was requested
-	var file *os.File
+	file := os.Stdout
 	if !*toStdOut {
-		file, _ = openOutfile()
+		file, err = openOutfile()
+		if err != nil {
+			log.Fatal("failed to open output file: ", err)
+		}
+		defer file.Close()
 		printInfo(*urlTarget, resp)
 	}
-	defer file.Close()
 
 	totalBytes := resp.ContentLength
-	if totalBytes == -1 {
-		log.Fatal(errors.New("content has zero length"))
-	}
-
 	bytesRead, err := copyContent(resp.Body, file, totalBytes)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println(statusString(bytesRead, totalBytes))
+	if !*toStdOut {
+		fmt.Println(statusString(bytesRead, totalBytes))
+	}
 }
 
 // copyContent reads the body content from the http connection and then
@@ -97,12 +98,13 @@ func copyContent(body io.ReadCloser, file *os.File, totalBytes int64) (int, erro
 		if err != nil {
 			log.Fatal(err)
 		} else if nOut != n {
-			return 0, errors.New(
-				fmt.Sprintf("% bytes read but %d byte written", n, nOut))
+			return 0, fmt.Errorf("% bytes read but %d byte written", n, nOut)
 		}
 
 		bytesRead += n
-		fmt.Print(statusString(bytesRead, totalBytes))
+		if !*toStdOut {
+			fmt.Print(statusString(bytesRead, totalBytes))
+		}
 	}
 
 	// write whatever is left
@@ -117,32 +119,33 @@ func copyContent(body io.ReadCloser, file *os.File, totalBytes int64) (int, erro
 
 // bufWrite writes content either to stdout or the requested output file
 func bufWrite(content []byte, file *os.File) (int, error) {
-	var n int
-	var err error
-	if file == nil {
-		if n, err = os.Stdout.Write(content); err != nil {
-			return n, err
-		}
-	} else {
-		if n, err = file.Write(content); err != nil {
-			return n, err
-		}
+	n, err := file.Write(content)
+	if err != nil {
+		return n, err
 	}
 	return n, nil
 }
 
 // openOutfile opens the output file if one was requested
+// Otherwise, we assume the output file is index.html
 func openOutfile() (*os.File, error) {
 
 	fileName := *outFileName
 	if fileName == "" {
+
+		// can we extract a
 		urlInfo, err := url.Parse(*urlTarget)
 		if err != nil {
 			return nil, err
 		}
-		if fileName = filepath.Base(urlInfo.Path); fileName == "" {
-			return nil, errors.New(fmt.Sprint("Could not extract filename from URL\n"))
+		if fileName = filepath.Base(urlInfo.Path); fileName == "." || fileName == "/" {
+			fileName = "index.html"
 		}
+	}
+
+	// if fileName already exists we bail
+	if _, err := os.Stat(fileName); err == nil {
+		return nil, fmt.Errorf("%s already exists\n", fileName)
 	}
 
 	file, err := os.Create(fileName)
@@ -155,12 +158,22 @@ func openOutfile() (*os.File, error) {
 
 // statusString returns the status string corresponding to the given
 // number of bytes read.
+// NOTE: Sites which don't provide the content length return a value of
+// -1 for totalbytes. In this case we print a simpler content string
 func statusString(bytesRead int, totalBytes int64) string {
-	percentage := float64(bytesRead) / float64(totalBytes) * 100
-	progressString := strings.Join(
-		[]string{progressBar[1 : 2+int(percentage/4)], ">"}, "")
-	return fmt.Sprintf("progress: %10d Bytes    %-30s  %2.1f%%\r", bytesRead,
-		progressString, percentage)
+	var formatString string
+	if totalBytes == -1 {
+		progressString := "<=>"
+		formatString = fmt.Sprintf("progress: %10d Bytes    %-30s  \r", bytesRead,
+			progressString)
+	} else {
+		percentage := float64(bytesRead) / float64(totalBytes) * 100
+		progressString := strings.Join(
+			[]string{progressBar[1 : 2+int(percentage/4)], ">"}, "")
+		formatString = fmt.Sprintf("progress: %10d Bytes    %-30s  %2.1f%%\r", bytesRead,
+			progressString, percentage)
+	}
+	return formatString
 }
 
 // printInfo prints a brief informative header about the connection
