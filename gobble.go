@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	//	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -25,7 +24,7 @@ import (
 var (
 	urlTarget   = flag.String("u", "", "url to download")
 	outFileName = flag.String("o", "", "name of output file")
-	toStdOut    = flag.Bool("s", false, "output to stdout")
+	toStdout    = flag.Bool("s", false, "output to stdout")
 )
 
 // general settings
@@ -43,10 +42,11 @@ func main() {
 	if *urlTarget == "" {
 		usage()
 	}
+	url := normalizeURLTarget(*urlTarget)
 
 	// start http client
 	client := &http.Client{}
-	resp, err := client.Get(*urlTarget)
+	resp, err := client.Get(url)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,29 +54,30 @@ func main() {
 
 	// open output file; nil if stdout was requested
 	file := os.Stdout
-	if !*toStdOut {
-		file, err = openOutfile()
+	if !*toStdout {
+		file, err = openOutfile(*outFileName, url)
 		if err != nil {
 			log.Fatal("failed to open output file: ", err)
 		}
 		defer file.Close()
-		printInfo(*urlTarget, resp)
+		printInfo(url, resp)
 	}
 
 	totalBytes := resp.ContentLength
-	bytesRead, err := copyContent(resp.Body, file, totalBytes)
+	bytesRead, err := copyContent(resp.Body, file, totalBytes, *toStdout)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if !*toStdOut {
+	if !*toStdout {
 		fmt.Println(statusString(bytesRead, totalBytes))
 	}
 }
 
 // copyContent reads the body content from the http connection and then
 // copies it either to the provided file or stdou
-func copyContent(body io.ReadCloser, file *os.File, totalBytes int64) (int, error) {
+func copyContent(body io.ReadCloser, file *os.File, totalBytes int64,
+	wantStdout bool) (int, error) {
 
 	buffer := make([]byte, numBytes)
 	bytesRead := 0
@@ -102,7 +103,7 @@ func copyContent(body io.ReadCloser, file *os.File, totalBytes int64) (int, erro
 		}
 
 		bytesRead += n
-		if !*toStdOut {
+		if !wantStdout {
 			fmt.Print(statusString(bytesRead, totalBytes))
 		}
 	}
@@ -128,13 +129,13 @@ func bufWrite(content []byte, file *os.File) (int, error) {
 
 // openOutfile opens the output file if one was requested
 // Otherwise, we assume the output file is index.html
-func openOutfile() (*os.File, error) {
+func openOutfile(outFileName, urlTarget string) (*os.File, error) {
 
-	fileName := *outFileName
+	fileName := outFileName
 	if fileName == "" {
 
 		// can we extract a
-		urlInfo, err := url.Parse(*urlTarget)
+		urlInfo, err := url.Parse(urlTarget)
 		if err != nil {
 			return nil, err
 		}
@@ -154,6 +155,16 @@ func openOutfile() (*os.File, error) {
 	}
 
 	return file, nil
+}
+
+// normalizeURLTarget currently only checks if an URL starts with
+// http:// and if not appends it
+func normalizeURLTarget(urlTarget string) string {
+	outString := urlTarget
+	if !strings.HasPrefix(urlTarget, "http://") {
+		outString = "http://" + urlTarget
+	}
+	return outString
 }
 
 // statusString returns the status string corresponding to the given
